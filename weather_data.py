@@ -5,6 +5,8 @@ git-blame-climate - Weather data collection and analysis tool
 import sqlite3
 import yaml
 import os
+import requests
+import time
 from typing import List, Dict, Any
 from datetime import datetime
 
@@ -104,3 +106,100 @@ def load_config(config_path: str = 'config.yaml') -> Dict[str, Any]:
         config = yaml.safe_load(f)
 
     return config
+
+
+def fetch_weather_data(
+    archive_url: str,
+    latitude: float,
+    longitude: float,
+    start_date: str,
+    end_date: str,
+    timezone: str
+) -> List[Dict[str, Any]]:
+    """Fetch weather data from Open-Meteo API with retry logic.
+
+    Args:
+        archive_url: Open-Meteo archive API URL
+        latitude: Location latitude
+        longitude: Location longitude
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+        timezone: Timezone (e.g., 'Europe/Madrid')
+
+    Returns:
+        List of weather records as dicts
+
+    Raises:
+        RuntimeError: If all retries fail
+    """
+    params = {
+        'latitude': latitude,
+        'longitude': longitude,
+        'start_date': start_date,
+        'end_date': end_date,
+        'hourly': 'temperature_2m,precipitation,wind_speed_10m,relative_humidity_2m',
+        'timezone': timezone
+    }
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(archive_url, params=params, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+                return _parse_weather_response(data)
+
+            # Non-200 status, will retry
+            if attempt < max_retries - 1:
+                sleep_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                time.sleep(sleep_time)
+        except requests.RequestException as e:
+            if attempt < max_retries - 1:
+                sleep_time = 2 ** attempt
+                time.sleep(sleep_time)
+            else:
+                raise RuntimeError(f"Failed to fetch weather data after {max_retries} retries: {e}")
+
+    raise RuntimeError(f"Failed to fetch weather data: HTTP {response.status_code}")
+
+
+def _parse_weather_response(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Parse Open-Meteo API response into database records.
+
+    Args:
+        data: API response JSON
+
+    Returns:
+        List of weather records
+    """
+    hourly = data['hourly']
+    times = hourly['time']
+    temps = hourly['temperature_2m']
+    precip = hourly['precipitation']
+    wind = hourly.get('wind_speed_10m', [None] * len(times))
+    humidity = hourly.get('relative_humidity_2m', [None] * len(times))
+
+    created_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+
+    records = []
+    for i in range(len(times)):
+        # Convert ISO format to database format
+        timestamp = times[i].replace('T', ' ')
+        if '+' in timestamp:
+            timestamp = timestamp.split('+')[0]
+        # Ensure seconds are included (add :00 if only HH:MM)
+        if timestamp.count(':') == 1:
+            timestamp += ':00'
+
+        records.append({
+            'timestamp': timestamp,
+            'temperature_c': temps[i],
+            'precipitation_mm': precip[i],
+            'wind_speed_kmh': wind[i],
+            'relative_humidity': humidity[i],
+            'source': 'open-meteo',
+            'created_at': created_at
+        })
+
+    return records
