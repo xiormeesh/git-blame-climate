@@ -262,6 +262,69 @@ def backfill_command(config: Dict[str, Any], start_date: str, end_date: str) -> 
     print(f"\nBackfill complete: {total_inserted} records inserted, {failed_chunks} chunks failed")
 
 
+def update_command(config: Dict[str, Any]) -> None:
+    """Update database with recent weather data.
+
+    Args:
+        config: Configuration dict
+    """
+    db_path = config['data']['database_file']
+    init_database(db_path)
+
+    # Find latest timestamp in database
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT MAX(timestamp) FROM weather_data")
+    result = cursor.fetchone()
+    conn.close()
+
+    if result[0] is None:
+        print("Database is empty. Please run backfill first:")
+        print("  python weather_data.py backfill")
+        return
+
+    last_timestamp = result[0]
+    last_date = datetime.strptime(last_timestamp, '%Y-%m-%d %H:%M:%S')
+    today = datetime.now()
+
+    # Determine which API to use
+    days_since_last = (today - last_date).days
+
+    if days_since_last == 0:
+        print("Database is already up to date")
+        return
+
+    print(f"Updating from {last_date.strftime('%Y-%m-%d')} to today...")
+
+    total_inserted = 0
+
+    # Use forecast API for last 16 days, archive for older
+    if days_since_last <= 16:
+        # Recent data - use forecast API
+        try:
+            records = fetch_weather_data(
+                archive_url=config['api']['open_meteo']['forecast_url'],
+                latitude=config['location']['latitude'],
+                longitude=config['location']['longitude'],
+                start_date=last_date.strftime('%Y-%m-%d'),
+                end_date=today.strftime('%Y-%m-%d'),
+                timezone=config['location']['timezone']
+            )
+
+            inserted = insert_weather_data(db_path, records)
+            total_inserted += inserted
+            print(f"✓ {inserted} records inserted from forecast API")
+
+        except RuntimeError as e:
+            print(f"✗ Failed to fetch recent data: {e}")
+    else:
+        # Older gap - use archive API with chunking
+        backfill_command(config, last_date.strftime('%Y-%m-%d'), today.strftime('%Y-%m-%d'))
+        return
+
+    print(f"\nUpdate complete: {total_inserted} records inserted")
+
+
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -301,7 +364,7 @@ def main():
         backfill_command(config, start_date, end_date)
 
     elif args.command == 'update':
-        print("Update command not yet implemented")
+        update_command(config)
 
     elif args.command == 'query':
         print("Query command not yet implemented")
