@@ -7,8 +7,9 @@ import yaml
 import os
 import requests
 import time
+import argparse
 from typing import List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def init_database(db_path: str) -> None:
@@ -203,3 +204,108 @@ def _parse_weather_response(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         })
 
     return records
+
+
+def backfill_command(config: Dict[str, Any], start_date: str, end_date: str) -> None:
+    """Backfill weather data for a date range.
+
+    Args:
+        config: Configuration dict
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+    """
+    db_path = config['data']['database_file']
+    init_database(db_path)
+
+    # Parse dates
+    start = datetime.strptime(start_date, '%Y-%m-%d')
+    end = datetime.strptime(end_date, '%Y-%m-%d')
+
+    if start >= end:
+        raise ValueError("Start date must be before end date")
+
+    # Split into 1-year (365 day) chunks
+    chunks = []
+    current = start
+    while current < end:
+        chunk_end = min(current + timedelta(days=365), end)
+        chunks.append((current, chunk_end))
+        current = chunk_end
+
+    total_inserted = 0
+    failed_chunks = 0
+
+    for chunk_start, chunk_end in chunks:
+        start_str = chunk_start.strftime('%Y-%m-%d')
+        end_str = chunk_end.strftime('%Y-%m-%d')
+
+        print(f"Fetching {start_str} to {end_str}...")
+
+        try:
+            records = fetch_weather_data(
+                archive_url=config['api']['open_meteo']['archive_url'],
+                latitude=config['location']['latitude'],
+                longitude=config['location']['longitude'],
+                start_date=start_str,
+                end_date=end_str,
+                timezone=config['location']['timezone']
+            )
+
+            inserted = insert_weather_data(db_path, records)
+            total_inserted += inserted
+            print(f"✓ {inserted} records inserted")
+
+        except RuntimeError as e:
+            print(f"✗ Failed to fetch chunk: {e}")
+            failed_chunks += 1
+
+    print(f"\nBackfill complete: {total_inserted} records inserted, {failed_chunks} chunks failed")
+
+
+def main():
+    """CLI entry point."""
+    parser = argparse.ArgumentParser(
+        description='git-blame-climate - Weather data collection tool'
+    )
+    subparsers = parser.add_subparsers(dest='command', help='Command to run')
+
+    # Backfill command
+    backfill_parser = subparsers.add_parser('backfill', help='Backfill historical weather data')
+    backfill_parser.add_argument('--start-date', help='Start date (YYYY-MM-DD)')
+    backfill_parser.add_argument('--end-date', help='End date (YYYY-MM-DD, defaults to today)')
+
+    # Update command (placeholder for next task)
+    update_parser = subparsers.add_parser('update', help='Update with recent weather data')
+
+    # Query command (placeholder for next task)
+    query_parser = subparsers.add_parser('query', help='Run SQL query on database')
+    query_parser.add_argument('sql', help='SQL query to execute')
+
+    args = parser.parse_args()
+
+    if not args.command:
+        parser.print_help()
+        return
+
+    # Load config
+    try:
+        config = load_config()
+    except FileNotFoundError as e:
+        print(str(e))
+        return
+
+    if args.command == 'backfill':
+        start_date = args.start_date or config['data']['backfill_start_date']
+        end_date = args.end_date or datetime.now().strftime('%Y-%m-%d')
+
+        backfill_command(config, start_date, end_date)
+
+    elif args.command == 'update':
+        print("Update command not yet implemented")
+
+    elif args.command == 'query':
+        print("Query command not yet implemented")
+
+
+if __name__ == '__main__':
+    main()
