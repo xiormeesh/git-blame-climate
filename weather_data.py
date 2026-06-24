@@ -325,6 +325,45 @@ def update_command(config: Dict[str, Any]) -> None:
     print(f"\nUpdate complete: {total_inserted} records inserted")
 
 
+def query_command(config: Dict[str, Any], sql: str) -> None:
+    """Execute SQL query and print results.
+
+    Args:
+        config: Configuration dict
+        sql: SQL query string
+    """
+    db_path = config['data']['database_file']
+
+    if not os.path.exists(db_path):
+        print(f"Database not found at {db_path}")
+        print("Run backfill first to create database")
+        return
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(sql)
+        results = cursor.fetchall()
+
+        # Print column names
+        if cursor.description:
+            col_names = [desc[0] for desc in cursor.description]
+            print(' | '.join(col_names))
+            print('-' * (len(' | '.join(col_names))))
+
+        # Print rows
+        for row in results:
+            print(' | '.join(str(val) for val in row))
+
+        print(f"\n{len(results)} row(s) returned")
+
+    except sqlite3.Error as e:
+        print(f"SQL error: {e}")
+    finally:
+        conn.close()
+
+
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -367,7 +406,7 @@ def main():
         update_command(config)
 
     elif args.command == 'query':
-        print("Query command not yet implemented")
+        query_command(config, args.sql)
 
 
 if __name__ == '__main__':
