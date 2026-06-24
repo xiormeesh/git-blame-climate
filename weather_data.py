@@ -3,6 +3,8 @@
 git-blame-climate - Weather data collection and analysis tool
 """
 import sqlite3
+import yaml
+import os
 from typing import List, Dict, Any
 from datetime import datetime
 
@@ -76,3 +78,29 @@ def insert_weather_data(db_path: str, records: List[Dict[str, Any]]) -> int:
     conn.commit()
     conn.close()
     return inserted
+
+
+def load_config(config_path: str = 'config.yaml') -> Dict[str, Any]:
+    """Load configuration from YAML file.
+
+    Args:
+        config_path: Path to config.yaml
+
+    Returns:
+        Configuration dictionary
+
+    Raises:
+        FileNotFoundError: If config file doesn't exist
+    """
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(
+            f"config.yaml not found at {config_path}\n\n"
+            "First-time setup:\n"
+            "  cp config.yaml.example config.yaml\n"
+            "  # Edit config.yaml with your location\n"
+        )
+
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    return config

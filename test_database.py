@@ -1,7 +1,8 @@
 import sqlite3
 import os
 import tempfile
-from weather_data import init_database, insert_weather_data
+import yaml
+from weather_data import init_database, insert_weather_data, load_config
 
 
 def test_init_database_creates_table():
@@ -145,3 +146,43 @@ def test_insert_weather_data_ignores_duplicates():
     finally:
         if os.path.exists(db_path):
             os.unlink(db_path)
+
+
+def test_load_config_success():
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        config_path = f.name
+        yaml.dump({
+            'location': {
+                'name': 'Test City',
+                'latitude': 40.0,
+                'longitude': -3.0,
+                'timezone': 'Europe/Madrid'
+            },
+            'data': {
+                'backfill_start_date': '2020-01-01',
+                'database_file': 'test.db'
+            },
+            'api': {
+                'open_meteo': {
+                    'archive_url': 'https://archive-api.open-meteo.com/v1/archive',
+                    'forecast_url': 'https://api.open-meteo.com/v1/forecast'
+                }
+            }
+        }, f)
+
+    try:
+        config = load_config(config_path)
+        assert config['location']['name'] == 'Test City'
+        assert config['location']['latitude'] == 40.0
+        assert config['data']['database_file'] == 'test.db'
+    finally:
+        if os.path.exists(config_path):
+            os.unlink(config_path)
+
+
+def test_load_config_missing_file():
+    try:
+        load_config('/nonexistent/config.yaml')
+        assert False, "Should raise FileNotFoundError"
+    except FileNotFoundError as e:
+        assert 'config.yaml not found' in str(e)
