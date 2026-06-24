@@ -8,7 +8,7 @@ Weather data collection tool for year-over-year trend analysis.
 # Clone and install
 git clone git@github.com:xiormeesh/git-blame-climate.git
 cd git-blame-climate
-pip install -r requirements.txt
+uv sync
 
 # Configure for your location
 cp config.yaml.example config.yaml

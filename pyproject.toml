@@ -1,0 +1,12 @@
+[project]
+name = "git-blame-climate"
+version = "0.1.0"
+description = "Weather data collection tool for year-over-year trend analysis"
+requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.31.0",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+git-blame-climate = "weather_data:main"

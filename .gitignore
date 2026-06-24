@@ -21,9 +21,5 @@ build/
 *.swo
 *~
 
-# OS
-.DS_Store
-Thumbs.db
-
 # Superpowers scratch files
 .superpowers/
