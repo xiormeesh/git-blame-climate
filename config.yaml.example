@@ -1,0 +1,14 @@
+location:
+  name: "Madrid"
+  latitude: 40.4168
+  longitude: -3.7038
+  timezone: "Europe/Madrid"
+
+data:
+  backfill_start_date: "2016-01-01"
+  database_file: "weather.db"
+
+api:
+  open_meteo:
+    archive_url: "https://archive-api.open-meteo.com/v1/archive"
+    forecast_url: "https://api.open-meteo.com/v1/forecast"
