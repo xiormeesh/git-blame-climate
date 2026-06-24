@@ -9,7 +9,7 @@ import requests
 import time
 import argparse
 from typing import List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 def init_database(db_path: str) -> None:
@@ -181,7 +181,7 @@ def _parse_weather_response(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     wind = hourly.get('wind_speed_10m', [None] * len(times))
     humidity = hourly.get('relative_humidity_2m', [None] * len(times))
 
-    created_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    created_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
     records = []
     for i in range(len(times)):
@@ -396,17 +396,22 @@ def main():
         print(str(e))
         return
 
-    if args.command == 'backfill':
-        start_date = args.start_date or config['data']['backfill_start_date']
-        end_date = args.end_date or datetime.now().strftime('%Y-%m-%d')
+    try:
+        if args.command == 'backfill':
+            start_date = args.start_date or config['data']['backfill_start_date']
+            end_date = args.end_date or datetime.now().strftime('%Y-%m-%d')
 
-        backfill_command(config, start_date, end_date)
+            backfill_command(config, start_date, end_date)
 
-    elif args.command == 'update':
-        update_command(config)
+        elif args.command == 'update':
+            update_command(config)
 
-    elif args.command == 'query':
-        query_command(config, args.sql)
+        elif args.command == 'query':
+            query_command(config, args.sql)
+
+    except ValueError as e:
+        print(f"Error: {e}")
+        return
 
 
 if __name__ == '__main__':

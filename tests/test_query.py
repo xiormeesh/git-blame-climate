@@ -3,7 +3,7 @@ import tempfile
 import io
 import sys
 from weather_data import query_command, init_database, insert_weather_data
-from datetime import datetime
+from datetime import datetime, timezone
 
 def test_query_command():
     """Test query command executes SQL and prints results."""
@@ -20,7 +20,7 @@ def test_query_command():
                 'wind_speed_kmh': 10.0,
                 'relative_humidity': 60.0,
                 'source': 'open-meteo',
-                'created_at': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
             },
             {
                 'timestamp': '2021-06-01 13:00:00',
@@ -29,7 +29,7 @@ def test_query_command():
                 'wind_speed_kmh': 12.0,
                 'relative_humidity': 55.0,
                 'source': 'open-meteo',
-                'created_at': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
             }
         ]
         insert_weather_data(db_path, records)

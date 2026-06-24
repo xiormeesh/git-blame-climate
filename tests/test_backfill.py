@@ -1,7 +1,7 @@
 import os
 import tempfile
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import patch
 import io
 import sys
@@ -38,7 +38,7 @@ def test_backfill_command_single_chunk():
                 'wind_speed_kmh': 10.0,
                 'relative_humidity': 60.0,
                 'source': 'open-meteo',
-                'created_at': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
             }
         ]
 
@@ -78,7 +78,7 @@ def test_backfill_command_multiple_chunks():
         mock_records = [{'timestamp': '2020-01-01 00:00:00', 'temperature_c': 15.0,
                         'precipitation_mm': 0.0, 'wind_speed_kmh': 5.0,
                         'relative_humidity': 50.0, 'source': 'open-meteo',
-                        'created_at': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}]
+                        'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}]
 
         with patch('weather_data.fetch_weather_data', return_value=mock_records) as mock_fetch:
             backfill_command(config, '2020-01-01', '2022-06-01')
@@ -122,7 +122,7 @@ def test_update_command_with_existing_data():
             'wind_speed_kmh': 12.0,
             'relative_humidity': 65.0,
             'source': 'open-meteo',
-            'created_at': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         }]
 
         with patch('weather_data.fetch_weather_data', return_value=new_records):
