@@ -25,4 +25,4 @@ build/
 .superpowers/
 
 # Generated visualization output
-temperature_chart.html
+temperature_chart_*.html
