@@ -163,27 +163,86 @@ def insert_weather_data(db_path: str, location_id: str, records: List[Dict[str, 
 
 
 def load_config(config_path: str = 'config.yaml') -> Dict[str, Any]:
-    """Load configuration from YAML file.
+    """Load and validate configuration from YAML file.
 
     Args:
         config_path: Path to config.yaml
 
     Returns:
-        Configuration dictionary
+        Configuration dictionary with validated locations list
 
     Raises:
         FileNotFoundError: If config file doesn't exist
+        ValueError: If config format is invalid or required fields missing
     """
     if not os.path.exists(config_path):
         raise FileNotFoundError(
-            f"config.yaml not found at {config_path}\n\n"
-            "First-time setup:\n"
-            "  cp config.yaml.example config.yaml\n"
-            "  # Edit config.yaml with your location\n"
+            f"Configuration file not found: {config_path}\n"
+            "Run: cp config.yaml.example config.yaml and edit with your settings"
         )
 
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+
+    # Check for old single-location format
+    if 'location' in config and 'locations' not in config:
+        raise ValueError(
+            "Invalid config format\n"
+            "Expected 'locations:' (list), found 'location:' (dict)\n\n"
+            "Migration required:\n"
+            "1. Rename 'location:' to 'locations:'\n"
+            "2. Convert to list format:\n"
+            "   locations:\n"
+            "     - id: \"santander\"\n"
+            "       name: \"Santander\"\n"
+            "       ...\n"
+            "3. Re-run backfill command"
+        )
+
+    # Validate locations list exists
+    if 'locations' not in config:
+        raise ValueError(
+            "Missing 'locations' section in config.yaml\n"
+            "Add at least one location under 'locations:' section"
+        )
+
+    if not isinstance(config['locations'], list):
+        raise ValueError("'locations' must be a list")
+
+    if len(config['locations']) == 0:
+        raise ValueError(
+            "No locations configured in config.yaml\n"
+            "Add at least one location under 'locations:' section\n\n"
+            "Example:\n"
+            "locations:\n"
+            "  - id: \"madrid\"\n"
+            "    name: \"Madrid\"\n"
+            "    latitude: 40.4168\n"
+            "    longitude: -3.7038\n"
+            "    timezone: \"Europe/Madrid\""
+        )
+
+    # Validate each location has required fields
+    required_fields = ['id', 'name', 'latitude', 'longitude', 'timezone']
+    location_ids = set()
+
+    for i, location in enumerate(config['locations']):
+        # Check required fields
+        for field in required_fields:
+            if field not in location:
+                raise ValueError(f"locations[{i}].{field} is required")
+
+        # Check for duplicate IDs
+        loc_id = location['id']
+        if loc_id in location_ids:
+            raise ValueError(f"Duplicate location ID: '{loc_id}' appears multiple times")
+        location_ids.add(loc_id)
+
+        # Validate latitude/longitude ranges
+        if not (-90 <= location['latitude'] <= 90):
+            raise ValueError(f"locations[{i}].latitude must be between -90 and 90")
+        if not (-180 <= location['longitude'] <= 180):
+            raise ValueError(f"locations[{i}].longitude must be between -180 and 180")
 
     return config
 
