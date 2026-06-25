@@ -544,47 +544,70 @@ def query_command(config: Dict[str, Any], location_id: str, sql: str) -> None:
         conn.close()
 
 
-def visualize_command(config: Dict[str, Any]) -> None:
-    """Generate interactive temperature visualization.
+def visualize_command(config: Dict[str, Any], location_id: str) -> None:
+    """Generate interactive temperature visualization for specified location.
+
+    Shows 11 years of daily max temperatures (current year + 10 prior full years).
 
     Args:
-        config: Configuration dict containing database_file path
+        config: Configuration dictionary
+        location_id: Location ID to visualize
+
+    Raises:
+        ValueError: If location_id not found in config
     """
+    # Validate location exists
+    try:
+        location = validate_location_id(config, location_id)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return
+
+    location_name = location['name']
+    table_name = get_table_name(location_id)
     db_path = config['data']['database_file']
 
     if not os.path.exists(db_path):
-        print("Error: No weather data found in database.")
+        print(f"Error: No weather data found in database.")
         print("Run 'python weather_data.py backfill' first.")
         return
+
+    # Calculate year range (11 years: current + 10 prior)
+    years = calculate_backfill_years()
+    start_year = years[0]
+    end_year = years[-1]
+
+    print(f"Querying weather data for {location_name} ({start_year}-{end_year})...")
 
     # Query database for daily max temperatures
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     try:
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
                 strftime('%Y', timestamp) as year,
                 strftime('%j', timestamp) as day_of_year,
                 MAX(temperature_c) as max_temp
-            FROM weather_data
+            FROM {table_name}
             GROUP BY year, day_of_year
             ORDER BY year, day_of_year
         """)
-
-        rows = cursor.fetchall()
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as e:
         conn.close()
-        print("Error: No weather data found in database.")
+        print(f"Error: No weather data found for {location_name}.")
         print("Run 'python weather_data.py backfill' first.")
         return
 
+    rows = cursor.fetchall()
     conn.close()
 
     if not rows:
-        print("Error: No weather data found in database.")
+        print(f"Error: No weather data found for {location_name}.")
         print("Run 'python weather_data.py backfill' first.")
         return
+
+    print("Generating chart...")
 
     # Process data into year-grouped structure
     year_data = {}
@@ -630,7 +653,7 @@ def visualize_command(config: Dict[str, Any]) -> None:
 
     # Configure layout
     fig.update_layout(
-        title='Daily Maximum Temperature (2016-2026)',
+        title=f'Daily Maximum Temperature - {location_name} ({start_year}-{end_year})',
         xaxis_title='Date',
         yaxis_title='Temperature (°C)',
         hovermode='x unified',
@@ -647,8 +670,8 @@ def visualize_command(config: Dict[str, Any]) -> None:
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
     )
 
-    # Save to HTML file
-    output_file = 'temperature_chart.html'
+    # Save to HTML file with location in filename
+    output_file = f'temperature_chart_{location_id}.html'
     try:
         fig.write_html(output_file)
         print(f"Chart saved to {output_file}")
@@ -689,6 +712,8 @@ def main():
     # Visualize command
     visualize_parser = subparsers.add_parser('visualize',
         help='Generate interactive temperature visualization')
+    visualize_parser.add_argument('--location', required=True,
+        help='Location ID to visualize')
 
     args = parser.parse_args()
 
@@ -720,7 +745,13 @@ def main():
             query_command(config, args.location, args.sql)
 
         elif args.command == 'visualize':
-            visualize_command(config)
+            if not hasattr(args, 'location') or args.location is None:
+                available = get_available_locations(config)
+                print("Error: --location flag is required")
+                print(f"Available locations: {', '.join(available)}")
+                print("\nUsage: python weather_data.py visualize --location <location_id>")
+                return
+            visualize_command(config, args.location)
 
     except ValueError as e:
         print(f"Error: {e}")
