@@ -344,64 +344,68 @@ def _parse_weather_response(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return records
 
 
-def backfill_command(config: Dict[str, Any], start_date: str, end_date: str) -> None:
-    """Backfill weather data for a date range.
+def backfill_command(config: Dict[str, Any]) -> None:
+    """Backfill historical weather data for all locations.
+
+    Fetches 11 years of data (current year + 10 prior full years) for each
+    location configured in config.yaml.
 
     Args:
-        config: Configuration dict
-        start_date: Start date (YYYY-MM-DD)
-        end_date: End date (YYYY-MM-DD)
+        config: Configuration dictionary with locations list
     """
     db_path = config['data']['database_file']
-    init_database(db_path, config['locations'])
+    locations = config['locations']
 
-    # Parse dates
-    start = datetime.strptime(start_date, '%Y-%m-%d')
-    end = datetime.strptime(end_date, '%Y-%m-%d')
+    # Initialize database with tables for all locations
+    init_database(db_path, locations)
 
-    if start >= end:
-        raise ValueError("Start date must be before end date")
+    # Calculate 11-year range
+    years = calculate_backfill_years()
+    start_year = years[0]
+    end_year = years[-1]
 
-    # Split into 1-year (365 day) chunks
-    chunks = []
-    current = start
-    while current < end:
-        chunk_end = min(current + timedelta(days=365), end)
-        chunks.append((current, chunk_end))
-        current = chunk_end
-
-    total_inserted = 0
-    failed_chunks = 0
-
-    for location in config['locations']:
+    # Backfill each location
+    for location in locations:
         location_id = location['id']
-        print(f"\nBackfilling {location_id}...")
+        location_name = location['name']
 
-        for chunk_start, chunk_end in chunks:
-            start_str = chunk_start.strftime('%Y-%m-%d')
-            end_str = chunk_end.strftime('%Y-%m-%d')
+        print(f"\nBackfilling {location_name} ({start_year}-{end_year})...")
+        total_inserted = 0
 
-            print(f"Fetching {start_str} to {end_str}...")
+        for year in years:
+            # Calculate date range for this year
+            start_date = f"{year}-01-01"
 
-            try:
-                records = fetch_weather_data(
-                    archive_url=config['api']['open_meteo']['archive_url'],
-                    latitude=location['latitude'],
-                    longitude=location['longitude'],
-                    start_date=start_str,
-                    end_date=end_str,
-                    timezone=location['timezone']
-                )
+            # For current year, only fetch through today
+            current_year = datetime.now().year
+            if year == current_year:
+                end_date = datetime.now().strftime("%Y-%m-%d")
+            else:
+                end_date = f"{year}-12-31"
 
-                inserted = insert_weather_data(db_path, location_id, records)
-                total_inserted += inserted
-                print(f"✓ {inserted} records inserted")
+            # Fetch data for this year
+            records = fetch_weather_data(
+                archive_url=config['api']['open_meteo']['archive_url'],
+                latitude=location['latitude'],
+                longitude=location['longitude'],
+                start_date=start_date,
+                end_date=end_date,
+                timezone=location['timezone']
+            )
 
-            except RuntimeError as e:
-                print(f"✗ Failed to fetch chunk: {e}")
-                failed_chunks += 1
+            # Insert records
+            inserted = insert_weather_data(db_path, location_id, records)
+            total_inserted += inserted
 
-    print(f"\nBackfill complete: {total_inserted} records inserted, {failed_chunks} chunks failed")
+            # Show progress
+            if year == current_year:
+                print(f"  Fetching {year}... {inserted} records inserted (through {end_date})")
+            else:
+                print(f"  Fetching {year}... {inserted} records inserted")
+
+        print(f"Total: {total_inserted} records inserted for {location_name}")
+
+    print(f"\nAll locations backfilled successfully.")
 
 
 def update_command(config: Dict[str, Any]) -> None:
@@ -662,9 +666,7 @@ def main():
     subparsers = parser.add_subparsers(dest='command', help='Command to run')
 
     # Backfill command
-    backfill_parser = subparsers.add_parser('backfill', help='Backfill historical weather data')
-    backfill_parser.add_argument('--start-date', help='Start date (YYYY-MM-DD)')
-    backfill_parser.add_argument('--end-date', help='End date (YYYY-MM-DD, defaults to today)')
+    backfill_parser = subparsers.add_parser('backfill', help='Backfill historical weather data (11 years)')
 
     # Update command (placeholder for next task)
     update_parser = subparsers.add_parser('update', help='Update with recent weather data')
@@ -692,10 +694,7 @@ def main():
 
     try:
         if args.command == 'backfill':
-            start_date = args.start_date or config['data']['backfill_start_date']
-            end_date = args.end_date or datetime.now().strftime('%Y-%m-%d')
-
-            backfill_command(config, start_date, end_date)
+            backfill_command(config)
 
         elif args.command == 'update':
             update_command(config)
