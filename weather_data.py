@@ -115,11 +115,12 @@ def init_database(db_path: str, locations: List[Dict[str, Any]]) -> None:
     conn.close()
 
 
-def insert_weather_data(db_path: str, records: List[Dict[str, Any]]) -> int:
-    """Insert weather data records into database.
+def insert_weather_data(db_path: str, location_id: str, records: List[Dict[str, Any]]) -> int:
+    """Insert weather data records into location-specific table.
 
     Args:
         db_path: Path to SQLite database
+        location_id: Location ID (determines table name)
         records: List of dicts with keys: timestamp, temperature_c, precipitation_mm,
                  wind_speed_kmh, relative_humidity, source, created_at
 
@@ -129,14 +130,15 @@ def insert_weather_data(db_path: str, records: List[Dict[str, Any]]) -> int:
     if not records:
         return 0
 
+    table_name = get_table_name(location_id)
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
     inserted = 0
     for record in records:
         try:
-            cursor.execute("""
-                INSERT OR IGNORE INTO weather_data
+            cursor.execute(f"""
+                INSERT OR IGNORE INTO {table_name}
                 (timestamp, temperature_c, precipitation_mm, wind_speed_kmh,
                  relative_humidity, source, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -312,29 +314,33 @@ def backfill_command(config: Dict[str, Any], start_date: str, end_date: str) -> 
     total_inserted = 0
     failed_chunks = 0
 
-    for chunk_start, chunk_end in chunks:
-        start_str = chunk_start.strftime('%Y-%m-%d')
-        end_str = chunk_end.strftime('%Y-%m-%d')
+    for location in config['locations']:
+        location_id = location['id']
+        print(f"\nBackfilling {location_id}...")
 
-        print(f"Fetching {start_str} to {end_str}...")
+        for chunk_start, chunk_end in chunks:
+            start_str = chunk_start.strftime('%Y-%m-%d')
+            end_str = chunk_end.strftime('%Y-%m-%d')
 
-        try:
-            records = fetch_weather_data(
-                archive_url=config['api']['open_meteo']['archive_url'],
-                latitude=config['location']['latitude'],
-                longitude=config['location']['longitude'],
-                start_date=start_str,
-                end_date=end_str,
-                timezone=config['location']['timezone']
-            )
+            print(f"Fetching {start_str} to {end_str}...")
 
-            inserted = insert_weather_data(db_path, records)
-            total_inserted += inserted
-            print(f"✓ {inserted} records inserted")
+            try:
+                records = fetch_weather_data(
+                    archive_url=config['api']['open_meteo']['archive_url'],
+                    latitude=location['latitude'],
+                    longitude=location['longitude'],
+                    start_date=start_str,
+                    end_date=end_str,
+                    timezone=location['timezone']
+                )
 
-        except RuntimeError as e:
-            print(f"✗ Failed to fetch chunk: {e}")
-            failed_chunks += 1
+                inserted = insert_weather_data(db_path, location_id, records)
+                total_inserted += inserted
+                print(f"✓ {inserted} records inserted")
+
+            except RuntimeError as e:
+                print(f"✗ Failed to fetch chunk: {e}")
+                failed_chunks += 1
 
     print(f"\nBackfill complete: {total_inserted} records inserted, {failed_chunks} chunks failed")
 
@@ -348,56 +354,82 @@ def update_command(config: Dict[str, Any]) -> None:
     db_path = config['data']['database_file']
     init_database(db_path, config['locations'])
 
-    # Find latest timestamp in database
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT MAX(timestamp) FROM weather_data")
-    result = cursor.fetchone()
-    conn.close()
-
-    if result[0] is None:
-        print("Database is empty. Please run backfill first:")
-        print("  python weather_data.py backfill")
-        return
-
-    last_timestamp = result[0]
-    last_date = datetime.strptime(last_timestamp, '%Y-%m-%d %H:%M:%S')
     today = datetime.now()
-
-    # Determine which API to use
-    days_since_last = (today - last_date).days
-
-    if days_since_last == 0:
-        print("Database is already up to date")
-        return
-
-    print(f"Updating from {last_date.strftime('%Y-%m-%d')} to today...")
-
     total_inserted = 0
 
-    # Use forecast API for last 16 days, archive for older
-    if days_since_last <= 16:
-        # Recent data - use forecast API
-        try:
-            records = fetch_weather_data(
-                archive_url=config['api']['open_meteo']['forecast_url'],
-                latitude=config['location']['latitude'],
-                longitude=config['location']['longitude'],
-                start_date=last_date.strftime('%Y-%m-%d'),
-                end_date=today.strftime('%Y-%m-%d'),
-                timezone=config['location']['timezone']
-            )
+    for location in config['locations']:
+        location_id = location['id']
+        table_name = get_table_name(location_id)
 
-            inserted = insert_weather_data(db_path, records)
-            total_inserted += inserted
-            print(f"✓ {inserted} records inserted from forecast API")
+        # Find latest timestamp in this location's table
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT MAX(timestamp) FROM {table_name}")
+        result = cursor.fetchone()
+        conn.close()
 
-        except RuntimeError as e:
-            print(f"✗ Failed to fetch recent data: {e}")
-    else:
-        # Older gap - use archive API with chunking
-        backfill_command(config, last_date.strftime('%Y-%m-%d'), today.strftime('%Y-%m-%d'))
-        return
+        if result[0] is None:
+            print(f"{location_id}: Database is empty. Please run backfill first.")
+            continue
+
+        last_timestamp = result[0]
+        last_date = datetime.strptime(last_timestamp, '%Y-%m-%d %H:%M:%S')
+
+        # Determine which API to use
+        days_since_last = (today - last_date).days
+
+        if days_since_last == 0:
+            print(f"{location_id}: Already up to date")
+            continue
+
+        print(f"Updating {location_id} from {last_date.strftime('%Y-%m-%d')} to today...")
+
+        # Use forecast API for last 16 days, archive for older
+        if days_since_last <= 16:
+            # Recent data - use forecast API
+            try:
+                records = fetch_weather_data(
+                    archive_url=config['api']['open_meteo']['forecast_url'],
+                    latitude=location['latitude'],
+                    longitude=location['longitude'],
+                    start_date=last_date.strftime('%Y-%m-%d'),
+                    end_date=today.strftime('%Y-%m-%d'),
+                    timezone=location['timezone']
+                )
+
+                inserted = insert_weather_data(db_path, location_id, records)
+                total_inserted += inserted
+                print(f"✓ {inserted} records inserted from forecast API")
+
+            except RuntimeError as e:
+                print(f"✗ Failed to fetch recent data: {e}")
+        else:
+            # Older gap - use archive API with chunking
+            print(f"Fetching {days_since_last} days of data from archive API...")
+            try:
+                # Split into 1-year chunks
+                current = last_date
+                while current < today:
+                    chunk_end = min(current + timedelta(days=365), today)
+                    start_str = current.strftime('%Y-%m-%d')
+                    end_str = chunk_end.strftime('%Y-%m-%d')
+
+                    records = fetch_weather_data(
+                        archive_url=config['api']['open_meteo']['archive_url'],
+                        latitude=location['latitude'],
+                        longitude=location['longitude'],
+                        start_date=start_str,
+                        end_date=end_str,
+                        timezone=location['timezone']
+                    )
+
+                    inserted = insert_weather_data(db_path, location_id, records)
+                    total_inserted += inserted
+                    print(f"✓ {start_str} to {end_str}: {inserted} records inserted")
+                    current = chunk_end
+
+            except RuntimeError as e:
+                print(f"✗ Failed to fetch archive data: {e}")
 
     print(f"\nUpdate complete: {total_inserted} records inserted")
 
