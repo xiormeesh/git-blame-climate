@@ -80,27 +80,36 @@ def calculate_backfill_years() -> List[int]:
     return list(range(current_year - 10, current_year + 1))
 
 
-def init_database(db_path: str) -> None:
-    """Initialize SQLite database with schema if it doesn't exist."""
+def init_database(db_path: str, locations: List[Dict[str, Any]]) -> None:
+    """Initialize SQLite database with one table per location.
+
+    Args:
+        db_path: Path to SQLite database file
+        locations: List of location dicts from config (each with 'id' field)
+    """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # Create table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS weather_data (
-            timestamp TEXT PRIMARY KEY,
-            temperature_c REAL NOT NULL,
-            precipitation_mm REAL NOT NULL,
-            wind_speed_kmh REAL,
-            relative_humidity REAL,
-            source TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
+    for location in locations:
+        location_id = location['id']
+        table_name = get_table_name(location_id)
 
-    # Create indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON weather_data(timestamp)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_date ON weather_data(DATE(timestamp))")
+        # Create table for this location
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+                timestamp TEXT PRIMARY KEY,
+                temperature_c REAL NOT NULL,
+                precipitation_mm REAL NOT NULL,
+                wind_speed_kmh REAL,
+                relative_humidity REAL,
+                source TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        # Create indexes for this location
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_timestamp_{location_id} ON {table_name}(timestamp)")
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_date_{location_id} ON {table_name}(DATE(timestamp))")
 
     conn.commit()
     conn.close()
@@ -283,7 +292,7 @@ def backfill_command(config: Dict[str, Any], start_date: str, end_date: str) -> 
         end_date: End date (YYYY-MM-DD)
     """
     db_path = config['data']['database_file']
-    init_database(db_path)
+    init_database(db_path, config['locations'])
 
     # Parse dates
     start = datetime.strptime(start_date, '%Y-%m-%d')
@@ -337,7 +346,7 @@ def update_command(config: Dict[str, Any]) -> None:
         config: Configuration dict
     """
     db_path = config['data']['database_file']
-    init_database(db_path)
+    init_database(db_path, config['locations'])
 
     # Find latest timestamp in database
     conn = sqlite3.connect(db_path)
