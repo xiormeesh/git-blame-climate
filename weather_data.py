@@ -14,6 +14,72 @@ import plotly.graph_objects as go
 import webbrowser
 
 
+def get_table_name(location_id: str) -> str:
+    """Get database table name for location.
+
+    Args:
+        location_id: Location ID from config
+
+    Returns:
+        Table name (e.g., "weather_data_santander")
+    """
+    return f"weather_data_{location_id}"
+
+
+def get_available_locations(config: Dict[str, Any]) -> List[str]:
+    """Get list of available location IDs from config.
+
+    Args:
+        config: Loaded configuration
+
+    Returns:
+        List of location IDs (e.g., ["santander", "madrid"])
+    """
+    if 'locations' not in config or not config['locations']:
+        return []
+    return [loc['id'] for loc in config['locations']]
+
+
+def validate_location_id(config: Dict[str, Any], location_id: str) -> Dict[str, Any]:
+    """Validate location exists in config and return location dict.
+
+    Args:
+        config: Loaded configuration
+        location_id: Location ID to validate
+
+    Returns:
+        Location dictionary with id, name, latitude, longitude, timezone
+
+    Raises:
+        ValueError: If location not found in config
+    """
+    available = get_available_locations(config)
+    if not available:
+        raise ValueError(
+            "No locations configured in config.yaml\n"
+            "Add at least one location under 'locations:' section"
+        )
+
+    for loc in config['locations']:
+        if loc['id'] == location_id:
+            return loc
+
+    raise ValueError(
+        f"Location '{location_id}' not found in config.\n"
+        f"Available locations: {', '.join(available)}"
+    )
+
+
+def calculate_backfill_years() -> List[int]:
+    """Calculate 11-year range for backfill (current + 10 prior).
+
+    Returns:
+        List of years (e.g., [2016, 2017, ..., 2026] for year 2026)
+    """
+    current_year = datetime.now().year
+    return list(range(current_year - 10, current_year + 1))
+
+
 def init_database(db_path: str) -> None:
     """Initialize SQLite database with schema if it doesn't exist."""
     conn = sqlite3.connect(db_path)
