@@ -10,6 +10,8 @@ import time
 import argparse
 from typing import List, Dict, Any
 from datetime import datetime, timedelta, timezone
+import plotly.graph_objects as go
+import webbrowser
 
 
 def init_database(db_path: str) -> None:
@@ -364,6 +366,128 @@ def query_command(config: Dict[str, Any], sql: str) -> None:
         conn.close()
 
 
+def visualize_command(config: Dict[str, Any]) -> None:
+    """Generate interactive temperature visualization.
+
+    Args:
+        config: Configuration dict containing database_file path
+    """
+    db_path = config['data']['database_file']
+
+    if not os.path.exists(db_path):
+        print("Error: No weather data found in database.")
+        print("Run 'python weather_data.py backfill' first.")
+        return
+
+    # Query database for daily max temperatures
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            SELECT
+                strftime('%Y', timestamp) as year,
+                strftime('%j', timestamp) as day_of_year,
+                MAX(temperature_c) as max_temp
+            FROM weather_data
+            GROUP BY year, day_of_year
+            ORDER BY year, day_of_year
+        """)
+
+        rows = cursor.fetchall()
+    except sqlite3.OperationalError:
+        conn.close()
+        print("Error: No weather data found in database.")
+        print("Run 'python weather_data.py backfill' first.")
+        return
+
+    conn.close()
+
+    if not rows:
+        print("Error: No weather data found in database.")
+        print("Run 'python weather_data.py backfill' first.")
+        return
+
+    # Process data into year-grouped structure
+    year_data = {}
+    for year_str, day_str, temp in rows:
+        day_num = int(day_str)
+
+        # Skip Feb 29 (day 60) for leap years to maintain 365-day axis
+        if day_num == 60:
+            # Check if leap year
+            year_int = int(year_str)
+            is_leap = (year_int % 4 == 0 and year_int % 100 != 0) or (year_int % 400 == 0)
+            if is_leap:
+                continue  # Skip Feb 29
+
+        # Adjust day numbers after Feb 29 for leap years
+        if day_num > 60:
+            year_int = int(year_str)
+            is_leap = (year_int % 4 == 0 and year_int % 100 != 0) or (year_int % 400 == 0)
+            if is_leap:
+                day_num -= 1  # Shift down by 1
+
+        if year_str not in year_data:
+            year_data[year_str] = []
+
+        year_data[year_str].append((day_num, temp))
+
+    # Create plotly figure
+    fig = go.Figure()
+
+    # Add one trace per year
+    for year in sorted(year_data.keys()):
+        data = year_data[year]
+        days = [d for d, t in data]
+        temps = [t for d, t in data]
+
+        fig.add_trace(go.Scatter(
+            x=days,
+            y=temps,
+            mode='lines',
+            name=year,
+            hovertemplate='Day %{x}<br>%{y:.1f}°C<extra></extra>'
+        ))
+
+    # Configure layout
+    fig.update_layout(
+        title='Daily Maximum Temperature (2016-2026)',
+        xaxis_title='Date',
+        yaxis_title='Temperature (°C)',
+        hovermode='x unified',
+        legend_title='Year (click to toggle)',
+        width=1200,
+        height=600
+    )
+
+    # X-axis: Month labels at month boundaries
+    fig.update_xaxes(
+        tickmode='array',
+        tickvals=[1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335],
+        ticktext=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    )
+
+    # Save to HTML file
+    output_file = 'temperature_chart.html'
+    try:
+        fig.write_html(output_file)
+        print(f"Chart saved to {output_file}")
+    except IOError as e:
+        print(f"Error: Cannot write to {output_file}")
+        print(f"Check file permissions in current directory.")
+        return
+
+    # Auto-open in browser
+    try:
+        file_url = f'file://{os.path.abspath(output_file)}'
+        webbrowser.open(file_url)
+        print("Opening chart in browser...")
+    except Exception:
+        print("Could not auto-open browser. Open the file manually.")
+
+
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -382,6 +506,10 @@ def main():
     # Query command (placeholder for next task)
     query_parser = subparsers.add_parser('query', help='Run SQL query on database')
     query_parser.add_argument('sql', help='SQL query to execute')
+
+    # Visualize command
+    visualize_parser = subparsers.add_parser('visualize',
+        help='Generate interactive temperature visualization')
 
     args = parser.parse_args()
 
@@ -408,6 +536,9 @@ def main():
 
         elif args.command == 'query':
             query_command(config, args.sql)
+
+        elif args.command == 'visualize':
+            visualize_command(config)
 
     except ValueError as e:
         print(f"Error: {e}")
