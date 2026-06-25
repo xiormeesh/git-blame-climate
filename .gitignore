@@ -23,3 +23,6 @@ build/
 
 # Superpowers scratch files
 .superpowers/
+
+# Generated visualization output
+temperature_chart.html

@@ -6,7 +6,5 @@ requires-python = ">=3.8"
 dependencies = [
     "requests>=2.31.0",
     "PyYAML>=6.0",
+    "plotly>=5.0.0",
 ]
-
-[project.scripts]
-git-blame-climate = "weather_data:main"
