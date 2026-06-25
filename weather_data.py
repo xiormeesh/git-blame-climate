@@ -344,11 +344,13 @@ def _parse_weather_response(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return records
 
 
-def backfill_command(config: Dict[str, Any]) -> None:
-    """Backfill historical weather data for all locations.
+def sync_command(config: Dict[str, Any]) -> None:
+    """Sync weather data for all locations (smart fetch).
 
-    Fetches 11 years of data (current year + 10 prior full years) for each
-    location configured in config.yaml.
+    For each location, determines the most efficient fetch strategy:
+    - Empty table: fetches full 11-year range
+    - Recent data (<7 days old): fetches only the gap (fast path)
+    - Stale data (≥7 days old): re-fetches full 11-year range to ensure completeness
 
     Args:
         config: Configuration dictionary with locations list
@@ -364,48 +366,148 @@ def backfill_command(config: Dict[str, Any]) -> None:
     start_year = years[0]
     end_year = years[-1]
 
-    # Backfill each location
+    # Sync each location
     for location in locations:
         location_id = location['id']
         location_name = location['name']
+        table_name = get_table_name(location_id)
 
-        print(f"\nBackfilling {location_name} ({start_year}-{end_year})...")
+        # Check if we have recent data
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT MAX(timestamp) FROM {table_name}")
+        result = cursor.fetchone()
+        conn.close()
+
+        last_timestamp = result[0] if result[0] else None
+
+        if last_timestamp is None:
+            # Empty table - full backfill
+            print(f"\nSyncing {location_name} (full backfill: {start_year}-{end_year})...")
+            _sync_full_range(config, location, years)
+        else:
+            # Check age of last data
+            last_dt = datetime.fromisoformat(last_timestamp.replace(' ', 'T'))
+            now = datetime.now()
+            age_days = (now - last_dt).days
+
+            if age_days < 7:
+                # Recent data - just fetch the gap (fast path)
+                print(f"\nSyncing {location_name} (incremental from {last_timestamp})...")
+                _sync_incremental(config, location, last_timestamp)
+            else:
+                # Stale data - re-fetch full range to ensure no gaps
+                print(f"\nSyncing {location_name} (full refresh: {start_year}-{end_year}, last data {age_days}d old)...")
+                _sync_full_range(config, location, years)
+
+    print(f"\nAll locations synced successfully.")
+
+
+def _sync_full_range(config: Dict[str, Any], location: Dict[str, Any], years: List[int]) -> None:
+    """Fetch full 11-year range for a location."""
+    db_path = config['data']['database_file']
+    location_id = location['id']
+    location_name = location['name']
+    total_inserted = 0
+
+    for year in years:
+        start_date = f"{year}-01-01"
+        current_year = datetime.now().year
+
+        if year == current_year:
+            end_date = datetime.now().strftime("%Y-%m-%d")
+        else:
+            end_date = f"{year}-12-31"
+
+        records = fetch_weather_data(
+            archive_url=config['api']['open_meteo']['archive_url'],
+            latitude=location['latitude'],
+            longitude=location['longitude'],
+            start_date=start_date,
+            end_date=end_date,
+            timezone=location['timezone']
+        )
+
+        inserted = insert_weather_data(db_path, location_id, records)
+        total_inserted += inserted
+
+        if year == current_year:
+            print(f"  {year}... {inserted} records inserted (through {end_date})")
+        else:
+            print(f"  {year}... {inserted} records inserted")
+
+    print(f"  Total: {total_inserted} records")
+
+
+def _sync_incremental(config: Dict[str, Any], location: Dict[str, Any], last_timestamp: str) -> None:
+    """Fetch only new data since last timestamp (fast path)."""
+    db_path = config['data']['database_file']
+    location_id = location['id']
+
+    last_dt = datetime.fromisoformat(last_timestamp.replace(' ', 'T'))
+    start_dt = last_dt + timedelta(hours=1)
+    now = datetime.now()
+
+    gap_hours = (now - last_dt).total_seconds() / 3600
+
+    # If gap is less than 1 hour, we're already current
+    if gap_hours < 1:
+        print(f"  Already current (last: {last_timestamp})")
+        return
+
+    start_date = start_dt.strftime("%Y-%m-%d")
+    end_date = now.strftime("%Y-%m-%d")
+
+    gap_days = (now - last_dt).days
+
+    # Use archive API (only works for historical data, not same-day)
+    # Archive API typically has ~5 day lag, so for very recent data we may get nothing
+    try:
+        records = fetch_weather_data(
+            archive_url=config['api']['open_meteo']['archive_url'],
+            latitude=location['latitude'],
+            longitude=location['longitude'],
+            start_date=start_date,
+            end_date=end_date,
+            timezone=location['timezone']
+        )
+
+        # Filter to only records after last timestamp
+        new_records = [r for r in records if r['timestamp'] > last_timestamp]
+        inserted = insert_weather_data(db_path, location_id, new_records)
+
+        print(f"  {inserted} new records (gap: {gap_days}d)")
+    except RuntimeError as e:
+        # Archive API may not have recent data yet (typical 5-day lag)
+        if "400" in str(e):
+            print(f"  No new data available yet (gap: {gap_days}d, archive has ~5d lag)")
+        else:
+            raise
+    else:
+        # Use archive API for older gaps, process in 1-year chunks
+        current_date = start_dt
         total_inserted = 0
 
-        for year in years:
-            # Calculate date range for this year
-            start_date = f"{year}-01-01"
+        while current_date < now:
+            chunk_start = current_date.strftime("%Y-%m-%d")
+            chunk_end = min(current_date + timedelta(days=365), now).strftime("%Y-%m-%d")
 
-            # For current year, only fetch through today
-            current_year = datetime.now().year
-            if year == current_year:
-                end_date = datetime.now().strftime("%Y-%m-%d")
-            else:
-                end_date = f"{year}-12-31"
-
-            # Fetch data for this year
             records = fetch_weather_data(
                 archive_url=config['api']['open_meteo']['archive_url'],
                 latitude=location['latitude'],
                 longitude=location['longitude'],
-                start_date=start_date,
-                end_date=end_date,
+                start_date=chunk_start,
+                end_date=chunk_end,
                 timezone=location['timezone']
             )
 
-            # Insert records
-            inserted = insert_weather_data(db_path, location_id, records)
+            new_records = [r for r in records if r['timestamp'] > last_timestamp]
+            inserted = insert_weather_data(db_path, location_id, new_records)
             total_inserted += inserted
 
-            # Show progress
-            if year == current_year:
-                print(f"  Fetching {year}... {inserted} records inserted (through {end_date})")
-            else:
-                print(f"  Fetching {year}... {inserted} records inserted")
+            current_date += timedelta(days=365)
 
-        print(f"Total: {total_inserted} records inserted for {location_name}")
-
-    print(f"\nAll locations backfilled successfully.")
+        print(f"  {total_inserted} new records (gap: {gap_days}d)")
 
 
 def update_command(config: Dict[str, Any]) -> None:
@@ -519,7 +621,7 @@ def query_command(config: Dict[str, Any], location_id: str, sql: str) -> None:
 
     if not os.path.exists(db_path):
         print(f"Error: Database not found: {db_path}")
-        print("Run 'python weather_data.py backfill' first.")
+        print("Run 'python weather_data.py sync' first.")
         return
 
     # Execute query
@@ -569,7 +671,7 @@ def visualize_command(config: Dict[str, Any], location_id: str) -> None:
 
     if not os.path.exists(db_path):
         print(f"Error: No weather data found in database.")
-        print("Run 'python weather_data.py backfill' first.")
+        print("Run 'python weather_data.py sync' first.")
         return
 
     # Calculate year range (11 years: current + 10 prior)
@@ -596,7 +698,7 @@ def visualize_command(config: Dict[str, Any], location_id: str) -> None:
     except sqlite3.OperationalError as e:
         conn.close()
         print(f"Error: No weather data found for {location_name}.")
-        print("Run 'python weather_data.py backfill' first.")
+        print("Run 'python weather_data.py sync' first.")
         return
 
     rows = cursor.fetchall()
@@ -604,7 +706,7 @@ def visualize_command(config: Dict[str, Any], location_id: str) -> None:
 
     if not rows:
         print(f"Error: No weather data found for {location_name}.")
-        print("Run 'python weather_data.py backfill' first.")
+        print("Run 'python weather_data.py sync' first.")
         return
 
     print("Generating chart...")
@@ -696,11 +798,8 @@ def main():
     )
     subparsers = parser.add_subparsers(dest='command', help='Command to run')
 
-    # Backfill command
-    backfill_parser = subparsers.add_parser('backfill', help='Backfill historical weather data (11 years)')
-
-    # Update command (placeholder for next task)
-    update_parser = subparsers.add_parser('update', help='Update with recent weather data')
+    # Sync command (replaces backfill and update)
+    sync_parser = subparsers.add_parser('sync', help='Sync weather data for all locations (smart fetch)')
 
     # Query command
     query_parser = subparsers.add_parser('query',
@@ -729,11 +828,8 @@ def main():
         return
 
     try:
-        if args.command == 'backfill':
-            backfill_command(config)
-
-        elif args.command == 'update':
-            update_command(config)
+        if args.command == 'sync':
+            sync_command(config)
 
         elif args.command == 'query':
             if not hasattr(args, 'location') or args.location is None:

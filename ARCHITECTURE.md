@@ -35,8 +35,15 @@ The 11-year range is processed year-by-year (not 365-day chunks) to:
 - Handle current year specially (only fetch through today)
 - Avoid API timeouts (one year = ~8760 hourly records)
 
-### Update command
-Uses forecast API for recent data (<16 days) because it's optimized for near-real-time data. Falls back to archive API for older gaps. If the database is empty, suggests running backfill instead - backfill's chunking is more efficient for large ranges.
+### Sync command (smart fetch)
+Single command that chooses the most efficient strategy per location:
+- **Empty table**: Full 11-year backfill (year-by-year)
+- **Recent data (<7 days old)**: Incremental fetch of just the gap
+  - Uses forecast API for ≤16 day gaps (optimized for real-time)
+  - Uses archive API with chunking for >16 day gaps
+- **Stale data (≥7 days old)**: Full 11-year re-fetch to ensure no gaps
+
+This replaces separate `backfill` and `update` commands with one idempotent operation.
 
 ### Configuration
 YAML for human readability. Supports multiple locations in a `locations:` list, each with:
@@ -49,25 +56,27 @@ The example uses Madrid and Barcelona instead of real locations to avoid exposin
 ## Data Flow
 
 ```
-User runs backfill
+User runs sync
     ↓
 Load and validate config.yaml (multi-location format)
     ↓
-Calculate 11-year range (current + 10 prior)
-    ↓
 Initialize database with one table per location
     ↓
-For each location in config:
-    For each year in range:
-        Fetch year's data from Open-Meteo API (with retry)
-        ↓
-        Parse response into records
-        ↓
-        INSERT OR IGNORE into weather_data_<location_id>
-        ↓
-        Report progress (e.g., "Fetching 2020... 8784 records inserted")
+For each location:
+    Check MAX(timestamp) in table
     ↓
-    Report location total
+    Choose strategy:
+      Empty table? → Full backfill (11 years)
+      Recent (<7d)? → Incremental (fast path)
+      Stale (≥7d)? → Full re-fetch
+    ↓
+    Fetch from Open-Meteo API (with retry)
+    ↓
+    Parse response into records
+    ↓
+    INSERT OR IGNORE into weather_data_<location_id>
+    ↓
+    Report progress
 ```
 
 ### Query/Visualize Flow

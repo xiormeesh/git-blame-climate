@@ -18,12 +18,10 @@ cp config.yaml.example config.yaml
 ## Usage
 
 ```bash
-# Backfill historical data (11 years: current year + 10 prior)
-# Fetches data for ALL locations in config.yaml
-python weather_data.py backfill
-
-# Update with recent data (all locations)
-python weather_data.py update
+# Sync weather data (smart fetch for all locations)
+# First run: fetches 11 years (current year + 10 prior)
+# Subsequent runs: fetches only new data since last sync
+python weather_data.py sync
 
 # Query a specific location's database
 python weather_data.py query --location madrid "SELECT COUNT(*) FROM weather_data_madrid WHERE temperature_c > 35"
@@ -146,8 +144,8 @@ ORDER BY year, location;
 - Backfill and update process all locations automatically (no flag needed)
 
 **"No weather data found for location"**
-- Run `python weather_data.py backfill` first to fetch historical data
-- This fetches 11 years for all configured locations
+- Run `python weather_data.py sync` first to fetch historical data
+- This fetches 11 years for all configured locations on first run
 
 **API fetch failures**
 - Check internet connection
