@@ -497,20 +497,32 @@ def update_command(config: Dict[str, Any]) -> None:
     print(f"\nUpdate complete: {total_inserted} records inserted")
 
 
-def query_command(config: Dict[str, Any], sql: str) -> None:
-    """Execute SQL query and print results.
+def query_command(config: Dict[str, Any], location_id: str, sql: str) -> None:
+    """Execute arbitrary SQL query on location-specific table.
 
     Args:
-        config: Configuration dict
-        sql: SQL query string
+        config: Configuration dictionary
+        location_id: Location ID (validates against config)
+        sql: SQL query string (user must specify full table name)
+
+    Raises:
+        ValueError: If location_id not found in config
     """
+    # Validate location exists
+    try:
+        validate_location_id(config, location_id)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return
+
     db_path = config['data']['database_file']
 
     if not os.path.exists(db_path):
-        print(f"Database not found at {db_path}")
-        print("Run backfill first to create database")
+        print(f"Error: Database not found: {db_path}")
+        print("Run 'python weather_data.py backfill' first.")
         return
 
+    # Execute query
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
@@ -518,20 +530,16 @@ def query_command(config: Dict[str, Any], sql: str) -> None:
         cursor.execute(sql)
         results = cursor.fetchall()
 
-        # Print column names
-        if cursor.description:
-            col_names = [desc[0] for desc in cursor.description]
-            print(' | '.join(col_names))
-            print('-' * (len(' | '.join(col_names))))
-
-        # Print rows
+        # Print results
         for row in results:
-            print(' | '.join(str(val) for val in row))
+            print(row)
 
-        print(f"\n{len(results)} row(s) returned")
+        if not results:
+            print("(no results)")
 
     except sqlite3.Error as e:
         print(f"SQL error: {e}")
+
     finally:
         conn.close()
 
@@ -671,8 +679,11 @@ def main():
     # Update command (placeholder for next task)
     update_parser = subparsers.add_parser('update', help='Update with recent weather data')
 
-    # Query command (placeholder for next task)
-    query_parser = subparsers.add_parser('query', help='Run SQL query on database')
+    # Query command
+    query_parser = subparsers.add_parser('query',
+        help='Run SQL query on weather database')
+    query_parser.add_argument('--location', required=True,
+        help='Location ID to query')
     query_parser.add_argument('sql', help='SQL query to execute')
 
     # Visualize command
@@ -700,7 +711,13 @@ def main():
             update_command(config)
 
         elif args.command == 'query':
-            query_command(config, args.sql)
+            if not hasattr(args, 'location') or args.location is None:
+                available = get_available_locations(config)
+                print("Error: --location flag is required")
+                print(f"Available locations: {', '.join(available)}")
+                print("\nUsage: python weather_data.py query --location <location_id> \"<SQL>\"")
+                return
+            query_command(config, args.location, args.sql)
 
         elif args.command == 'visualize':
             visualize_command(config)
